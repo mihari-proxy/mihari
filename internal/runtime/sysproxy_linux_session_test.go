@@ -58,28 +58,37 @@ func assertNoSessionlessProxyWrite(t *testing.T, root string) {
 }
 
 func TestSystemProxyWithoutDesktopSessionDoesNotDegrade(t *testing.T) {
-	for _, enable := range []bool{true, false} {
-		name, mode := "enable", "none"
-		if !enable {
-			name, mode = "disable", "manual"
-		}
-		t.Run(name, func(t *testing.T) {
-			root := installSessionlessGsettings(t, mode, "9190", false)
-			manager := newTestManager(Options{SysProxy: sysproxy.PlatformBackend{}, Settings: defaultSysProxySettings(!enable), SettingsPath: filepath.Join(root, "settings.yaml")})
+	for _, tc := range []struct {
+		name, mode, port string
+		enable, force    bool
+		wantCode         protocol.ErrorCode
+	}{
+		{name: "enable", mode: "none", enable: true, wantCode: protocol.CodeUpstreamFailure},
+		{name: "disable_owned", mode: "manual", port: "9190", wantCode: protocol.CodeUpstreamFailure},
+		{name: "enable_foreign", mode: "manual", port: "7890", enable: true, wantCode: protocol.CodeSystemProxyConflict},
+		{name: "disable_foreign", mode: "manual", port: "7890", wantCode: protocol.CodeSystemProxyNotOwned},
+		{name: "force_foreign", mode: "manual", port: "7890", enable: true, force: true, wantCode: protocol.CodeUpstreamFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := installSessionlessGsettings(t, tc.mode, tc.port, false)
+			manager := newTestManager(Options{SysProxy: sysproxy.PlatformBackend{}, Settings: defaultSysProxySettings(!tc.enable), SettingsPath: filepath.Join(root, "settings.yaml")})
 			var err error
-			if enable {
-				_, err = manager.EnableSystemProxy(t.Context(), Operation{ID: "no-session", Source: "test"}, false)
+			if tc.enable {
+				_, err = manager.EnableSystemProxy(t.Context(), Operation{ID: "no-session", Source: "test"}, tc.force)
 			} else {
 				_, err = manager.DisableSystemProxy(t.Context(), Operation{ID: "no-session", Source: "test"})
 			}
 			var api protocol.APIError
-			if !errors.As(err, &api) || api.Code != protocol.CodeUpstreamFailure || !strings.Contains(diagnostics.Capture(err).Text, "GNOME desktop session is unavailable") {
+			if !errors.As(err, &api) || api.Code != tc.wantCode {
+				t.Fatalf("got %v, want %s", err, tc.wantCode)
+			}
+			if tc.wantCode == protocol.CodeUpstreamFailure && !strings.Contains(diagnostics.Capture(err).Text, "GNOME desktop session is unavailable") {
 				t.Fatalf("expected session preflight failure: %v", err)
 			}
 			if manager.Snapshot().Health == "degraded" {
 				t.Fatalf("missing desktop session degraded daemon: %v", err)
 			}
-			if manager.settingsSnapshot().SystemProxyDesired != !enable {
+			if manager.settingsSnapshot().SystemProxyDesired != !tc.enable {
 				t.Fatal("changed unsupported proxy intent")
 			}
 			if manager.Snapshot().Revision != 0 {
@@ -91,6 +100,21 @@ func TestSystemProxyWithoutDesktopSessionDoesNotDegrade(t *testing.T) {
 			assertNoSessionlessProxyWrite(t, root)
 		})
 	}
+}
+
+func TestDisableSystemProxyWithoutSessionClearsSavedIntentWhenOff(t *testing.T) {
+	root := installSessionlessGsettings(t, "none", "", false)
+	path := filepath.Join(root, "settings.yaml")
+	manager := newTestManager(Options{SysProxy: sysproxy.PlatformBackend{}, Settings: defaultSysProxySettings(true), SettingsPath: path})
+	status, err := manager.DisableSystemProxy(t.Context(), Operation{ID: "clear-intent", Source: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Desired || status.Observed.Enabled || status.Revision != 1 {
+		t.Fatalf("unexpected proxy status: %+v", status)
+	}
+	assertSettingsDesired(t, path, false)
+	assertNoSessionlessProxyWrite(t, root)
 }
 
 func TestDataResetWithoutDesktopSessionUsesObservedProxy(t *testing.T) {

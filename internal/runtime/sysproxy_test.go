@@ -177,6 +177,30 @@ func TestDisableSystemProxyWhenAlreadyOff(t *testing.T) {
 	}
 }
 
+func TestDisableSystemProxyWhenOffRollsBackOnlyIntentOnReadFailure(t *testing.T) {
+	backend := &hookSysProxyBackend{}
+	readErr := errors.New("proxy read failed after clearing intent")
+	backend.onGet = func() {
+		if backend.getCalls == 2 {
+			backend.getErr = readErr
+		}
+	}
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	manager := newTestManager(Options{SysProxy: backend, Settings: defaultSysProxySettings(true), SettingsPath: path})
+	_, err := manager.DisableSystemProxy(t.Context(), Operation{ID: "disable-off-read-failed", Source: "test"})
+	var api protocol.APIError
+	if !errors.Is(err, readErr) || !errors.As(err, &api) || api.Code != protocol.CodeUpstreamFailure {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertSettingsDesired(t, path, true)
+	if snapshot := manager.Snapshot(); snapshot.Health != "ok" || snapshot.Revision != 0 {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+	if backend.enableCalls != 0 || backend.disableCalls != 0 {
+		t.Fatalf("unexpected OS writes: enable=%d disable=%d", backend.enableCalls, backend.disableCalls)
+	}
+}
+
 func TestEnableSystemProxyRejectsStaleRevision(t *testing.T) {
 	backend := &sysproxy.FakeBackend{State: sysproxy.State{Enabled: false}}
 	manager := newSysProxyManager(t, backend, defaultSysProxySettings(false))

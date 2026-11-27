@@ -59,11 +59,6 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 	if err := m.checkIfRevision(op.IfRevision); err != nil {
 		return protocol.SystemProxyStatus{}, err
 	}
-	if checker, ok := m.sysProxy.(interface{ CheckWritable() error }); ok {
-		if err := checker.CheckWritable(); err != nil {
-			return protocol.SystemProxyStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "check system proxy write availability"}, err)
-		}
-	}
 
 	settings := m.settingsSnapshot()
 	target, host, port, err := resolveSystemProxyTarget(settings.MixedAddr)
@@ -88,6 +83,12 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 			Details: map[string]any{"current_server": observed.Server, "target_server": target},
 		}
 	}
+	writeProxy := enable || sysproxy.IsOwned(observed, target)
+	if checker, ok := m.sysProxy.(interface{ CheckWritable(context.Context) error }); ok && writeProxy {
+		if err := checker.CheckWritable(ctx); err != nil {
+			return protocol.SystemProxyStatus{}, diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "check system proxy write availability"}, err)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return protocol.SystemProxyStatus{}, err
 	}
@@ -108,16 +109,16 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 		if err := m.sysProxy.Enable(host, port); err != nil {
 			applyErr = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "enable system proxy"}, err)
 		}
-	} else if sysproxy.IsOwned(observed, target) {
+	} else if writeProxy {
 		if err := m.sysProxy.Disable(); err != nil {
 			applyErr = diagnostics.Wrap(protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "disable system proxy"}, err)
 		}
 	}
 	if applyErr != nil {
-		return protocol.SystemProxyStatus{}, m.compensateSystemProxy(ctx, op, candidate, observed, applyErr, true)
+		return protocol.SystemProxyStatus{}, m.compensateSystemProxy(ctx, op, candidate, observed, applyErr, writeProxy)
 	}
 	if err := ctx.Err(); err != nil {
-		return protocol.SystemProxyStatus{}, m.compensateSystemProxy(ctx, op, candidate, observed, err, true)
+		return protocol.SystemProxyStatus{}, m.compensateSystemProxy(ctx, op, candidate, observed, err, writeProxy)
 	}
 	confirmed, err := m.sysProxy.Get()
 	if err != nil {
@@ -128,7 +129,7 @@ func (m *Manager) mutateSystemProxy(ctx context.Context, op Operation, enable, f
 		applyErr = protocol.APIError{Code: protocol.CodeUpstreamFailure, Message: "disable system proxy"}
 	}
 	if applyErr != nil {
-		return protocol.SystemProxyStatus{}, m.compensateSystemProxy(ctx, op, candidate, observed, applyErr, true)
+		return protocol.SystemProxyStatus{}, m.compensateSystemProxy(ctx, op, candidate, observed, applyErr, writeProxy)
 	}
 
 	_, err = m.updateStateLocked(context.WithoutCancel(ctx), state.CommandMeta{
